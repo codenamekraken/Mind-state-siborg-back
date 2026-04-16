@@ -6,3 +6,8 @@ videos_photos/
 *.h5
 *.pkl
 *.mp4
+
+# Allow production model artifacts only in backend saved_models
+!BACKEND/saved_models/
+!BACKEND/saved_models/*.h5
+!BACKEND/saved_models/*.pkl
