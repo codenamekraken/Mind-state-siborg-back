@@ -30,10 +30,10 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 MEMORY_FILE = BASE_DIR / "memory_store.json"
 MAX_MEMORY_ITEMS = 20
-APP_ENV = os.getenv("APP_ENV", "development").lower()
+APP_ENV = os.getenv("APP_ENV", "production").lower()
 
 def _parse_allowed_origins() -> List[str]:
-    origins = os.getenv("CORS_ORIGINS", "*")
+    origins = os.getenv("CORS_ORIGINS", "https://mind-state-siborg.netlify.app")
     return [o.strip() for o in origins.split(",") if o.strip()]
 
 ALLOWED_ORIGINS = _parse_allowed_origins()
