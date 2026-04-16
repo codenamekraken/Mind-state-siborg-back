@@ -2,8 +2,11 @@
  * ==========================================================================
  * Mind-state-siborg - ESP32 Sensor Code (FINAL WORKING VERSION)
  *
- * This version replaces the faulty library beat detector with a custom,
- * direct peak-detection algorithm.
+ * Hybrid version:
+ * - Works with MAX30105-only setup (your current hardware)
+ * - Uses Wire pins SDA=21, SCL=22
+ * - Uses heartRate.h beat detection + custom fallback peak detection
+ * - Keeps BLE payload compatible with frontend/backend
  * ==========================================================================
  */
 
@@ -13,7 +16,7 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include "MAX30105.h"
-// #include "heartRate.h" // <-- REMOVED: No longer using the library's beat detector
+#include "heartRate.h"
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
@@ -37,8 +40,20 @@ const int MIN_IBI_FOR_CALCULATION = 5;
 long ibiBuffer[IBI_BUFFER_SIZE];
 int ibiCount = 0;
 long lastBeatTime = 0;
-float beatsPerMinute;
+float beatsPerMinute = 0.0;
 float lastValidRmssd = 0.0;
+
+// --- MAX30105 BPM/SpO2 Variables ---
+float bpmSmoothed = 0.0;
+int bpmOut = 0;
+int spo2Out = 0;
+float irDC = 0.0;
+float redDC = 0.0;
+float spo2Filtered = 98.0;
+
+// --- Sensor Presence Flags ---
+bool hasMPU = false;
+bool hasMAX30105 = false;
 
 // --- Custom Beat Detector Variables ---
 long lastIrValue = 0;
@@ -84,7 +99,8 @@ class MyServerCallbacks: public BLEServerCallbacks {
 void processOtherSensors();
 void addIBIToBuffer(long ibi);
 float calculateRMSSD(int numSamples);
-void checkI2Cdevice(byte addr, const char* name);
+bool checkI2Cdevice(byte addr, const char* name);
+void updateSpO2(long ir, long red);
 
 // ==========================================================================
 //                                SETUP
@@ -97,20 +113,33 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, LOW);
   
-  Wire.begin();
-  checkI2Cdevice(MPU_I2C_ADDR, "MPU6050");
-  checkI2Cdevice(MAX30105_I2C_ADDR, "MAX3010x");
+  // User-requested I2C pins
+  Wire.begin(21, 22);
+
+  hasMPU = checkI2Cdevice(MPU_I2C_ADDR, "MPU6050");
+  hasMAX30105 = checkI2Cdevice(MAX30105_I2C_ADDR, "MAX3010x");
 
   // --- Initialize MPU6050
-  Wire.beginTransmission(MPU_I2C_ADDR);
-  Wire.write(0x6B); Wire.write(0x00);
-  Wire.endTransmission(true);
+  if (hasMPU) {
+    Wire.beginTransmission(MPU_I2C_ADDR);
+    Wire.write(0x6B); Wire.write(0x00);
+    Wire.endTransmission(true);
+  } else {
+    Serial.println("⚠️ MPU6050 not found. Sending ACC as 0.");
+  }
 
   // --- Initialize MAX30102
-  if (particleSensor.begin(Wire, I2C_SPEED_FAST)) {
-    // Optimal settings from our debugging
-    particleSensor.setup(0x0A, 8, 2, 100, 411, 2048);
+  if (hasMAX30105 && particleSensor.begin(Wire, I2C_SPEED_FAST)) {
+    // Tuned close to your older stable profile
+    particleSensor.setup(75, 8, 2, 200, 411, 8192);
+    particleSensor.setPulseAmplitudeIR(0x40);
+    particleSensor.setPulseAmplitudeRed(0x40);
+    particleSensor.setPulseAmplitudeGreen(0);
     particleSensor.clearFIFO();
+    Serial.println("✅ MAX30105 initialized.");
+  } else {
+    hasMAX30105 = false;
+    Serial.println("⚠️ MAX30105 not found. HRV/BPM/SpO2 will be 0.");
   }
   
   // --- Initialize Other Sensors
@@ -135,7 +164,12 @@ void setup() {
 //                                 LOOP
 // ==========================================================================
 void loop() {
-  long irValue = particleSensor.getIR();
+  long irValue = 0;
+  long redValue = 0;
+  if (hasMAX30105) {
+    irValue = particleSensor.getIR();
+    redValue = particleSensor.getRed();
+  }
 
   // --- Finger Detection ---
   if (irValue < 10000) {
@@ -145,7 +179,11 @@ void loop() {
         ibiCount = 0;
     }
     isRising = false; // Reset beat detector
+    bpmOut = 0;
+    spo2Out = 0;
   } else {
+    bool beatDetected = checkForBeat(irValue); // library detector from heartRate.h
+
     // --- ✅ NEW BEAT DETECTION ALGORITHM ---
     if (irValue > lastIrValue) { // If signal is rising
         isRising = true;
@@ -154,6 +192,11 @@ void loop() {
     // If the signal was rising and has just started to fall, we have found a peak.
     if (irValue < lastIrValue && isRising) {
         isRising = false; // Reset for the next peak
+      beatDetected = true; // fallback detector
+
+    }
+
+    if (beatDetected) {
 
         long currentTime = millis();
         long delta = currentTime - lastBeatTime;
@@ -161,6 +204,12 @@ void loop() {
         // Check if the time between beats is reasonable (30-240 BPM)
         if (delta > 250 && delta < 2000) {
             lastBeatTime = currentTime; // Log the time of this valid beat
+            beatsPerMinute = 60000.0 / (float)delta;
+            if (beatsPerMinute >= 45.0 && beatsPerMinute <= 180.0) {
+              if (bpmSmoothed <= 0.0) bpmSmoothed = beatsPerMinute;
+              else bpmSmoothed = 0.85 * bpmSmoothed + 0.15 * beatsPerMinute;
+              bpmOut = (int)(bpmSmoothed + 0.5);
+            }
             
             Serial.println("******************************************");
             Serial.println("❤️ [HRV] Beat Detected! IBI: " + String(delta) + " ms");
@@ -173,6 +222,8 @@ void loop() {
             }
         }
     }
+
+        updateSpO2(irValue, redValue);
   }
   lastIrValue = irValue; // Update the last value for the next loop
 
@@ -187,6 +238,8 @@ void loop() {
     doc["acc_x_g"] = acc_x_g;
     doc["acc_y_g"] = acc_y_g;
     doc["acc_z_g"] = acc_z_g;
+    doc["bpm"] = bpmOut;
+    doc["spo2"] = spo2Out;
     
     String output;
     serializeJson(doc, output);
@@ -206,17 +259,23 @@ void loop() {
 
 void processOtherSensors() {
   // MPU6050
-  int16_t raw_ax, raw_ay, raw_az;
-  Wire.beginTransmission(MPU_I2C_ADDR);
-  Wire.write(0x3B);
-  Wire.endTransmission(false);
-  Wire.requestFrom((uint8_t)MPU_I2C_ADDR, (uint8_t)6, (bool)true);
-  raw_ax = Wire.read() << 8 | Wire.read();
-  raw_ay = Wire.read() << 8 | Wire.read();
-  raw_az = Wire.read() << 8 | Wire.read();
-  acc_x_g = (float)raw_ax / ACC_SENSITIVITY;
-  acc_y_g = (float)raw_ay / ACC_SENSITIVITY;
-  acc_z_g = (float)raw_az / ACC_SENSITIVITY;
+  if (hasMPU) {
+    int16_t raw_ax, raw_ay, raw_az;
+    Wire.beginTransmission(MPU_I2C_ADDR);
+    Wire.write(0x3B);
+    Wire.endTransmission(false);
+    Wire.requestFrom((uint8_t)MPU_I2C_ADDR, (uint8_t)6, (bool)true);
+    raw_ax = Wire.read() << 8 | Wire.read();
+    raw_ay = Wire.read() << 8 | Wire.read();
+    raw_az = Wire.read() << 8 | Wire.read();
+    acc_x_g = (float)raw_ax / ACC_SENSITIVITY;
+    acc_y_g = (float)raw_ay / ACC_SENSITIVITY;
+    acc_z_g = (float)raw_az / ACC_SENSITIVITY;
+  } else {
+    acc_x_g = 0.0;
+    acc_y_g = 0.0;
+    acc_z_g = 0.0;
+  }
 
   // DS18B20
   tempSensor.requestTemperatures();
@@ -262,11 +321,39 @@ float calculateRMSSD(int numSamples) {
   return sqrt(sumOfSquares / (numSamples - 1));
 }
 
-void checkI2Cdevice(byte addr, const char* name) {
+void updateSpO2(long ir, long red) {
+  if (ir <= 0 || red <= 0) {
+    spo2Out = 0;
+    return;
+  }
+
+  irDC = 0.95f * irDC + 0.05f * (float)ir;
+  redDC = 0.95f * redDC + 0.05f * (float)red;
+
+  float irAC = (float)ir - irDC;
+  if (irAC < 0) irAC = -irAC;
+  float redAC = (float)red - redDC;
+  if (redAC < 0) redAC = -redAC;
+
+  if (irDC > 1 && redDC > 1 && irAC > 1) {
+    float R = (redAC / redDC) / (irAC / irDC);
+    float spo2Now = 110.0f - 25.0f * R;
+
+    if (spo2Now > 100.0f) spo2Now = 100.0f;
+    if (spo2Now < 80.0f) spo2Now = 80.0f;
+
+    spo2Filtered = 0.90f * spo2Filtered + 0.10f * spo2Now;
+    spo2Out = (int)(spo2Filtered + 0.5f);
+  }
+}
+
+bool checkI2Cdevice(byte addr, const char* name) {
   Wire.beginTransmission(addr);
   byte error = Wire.endTransmission();
   if (error != 0) {
-    Serial.println("Device at 0x" + String(addr, HEX) + " not found!");
-    while(1);
+    Serial.println(String("⚠️ ") + name + " at 0x" + String(addr, HEX) + " not found.");
+    return false;
   }
+  Serial.println(String("✅ ") + name + " found at 0x" + String(addr, HEX));
+  return true;
 }

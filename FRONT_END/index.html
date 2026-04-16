@@ -1113,6 +1113,16 @@
                     <div class="unit">ms</div>
                 </div>
                 <div class="sensor-tile">
+                    <div class="label">BPM</div>
+                    <div class="value"><span id="value-bpm">--</span></div>
+                    <div class="unit">bpm</div>
+                </div>
+                <div class="sensor-tile">
+                    <div class="label">SpO₂</div>
+                    <div class="value"><span id="value-spo2">--</span></div>
+                    <div class="unit">%</div>
+                </div>
+                <div class="sensor-tile">
                     <div class="label">Temp</div>
                     <div class="value"><span id="value-temp">--</span></div>
                     <div class="unit">°C</div>
@@ -1247,9 +1257,14 @@ const LOCAL_MEMORY_KEY = 'mind_state_siborg_checkins_v1';
 let currentStep = 0;
 let esp32Device = null;
 let latestPhysioData = "{}";
+let latestPhysioObj = {};
 let imageBlob = null;
 let audioBlob = null;
 let mediaRecorder, audioChunks = [];
+let questionPhysioSamples = [];
+let questionPhysioCaptureTimer = null;
+let heartbeatCalibration = { calibrated: false, baseline_bpm: 0, baseline_hrv: 0, baseline_spo2: 0, samples: 0 };
+let physioHistory = [];
 let currentDassQ = 0;
 const dassAnswers = new Array(21).fill(null);
 let aiCheckinQuestions = [];
@@ -1297,6 +1312,90 @@ const stepInstructions = [
 
 const stepIcons = ['👋','📡','📸','🎤','🤔','✨','🧘','📊'];
 const TOTAL_STEPS = 6; // 1-6
+
+function safeNumber(v, fallback = 0) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : fallback;
+}
+
+function pushPhysioSample(sample) {
+    if (!sample || typeof sample !== 'object') return;
+    const s = {
+        ts: Date.now(),
+        eda_uS: safeNumber(sample.eda_uS, 0),
+        hrv_rmssd: safeNumber(sample.hrv_rmssd, 0),
+        temp_c: safeNumber(sample.temp_c, 0),
+        acc_x_g: safeNumber(sample.acc_x_g, 0),
+        acc_y_g: safeNumber(sample.acc_y_g, 0),
+        acc_z_g: safeNumber(sample.acc_z_g, 0),
+        bpm: safeNumber(sample.bpm, 0),
+        spo2: safeNumber(sample.spo2, 0),
+    };
+    physioHistory.push(s);
+    if (physioHistory.length > 300) physioHistory = physioHistory.slice(-300);
+}
+
+function recentSamples(windowMs = 9000) {
+    const cutoff = Date.now() - windowMs;
+    return physioHistory.filter(s => s.ts >= cutoff);
+}
+
+function computeCalibration(samples) {
+    const valid = samples.filter(s => s.bpm >= 45 && s.bpm <= 170 && s.hrv_rmssd >= 0);
+    if (valid.length < 5) {
+        return { calibrated: false, baseline_bpm: 0, baseline_hrv: 0, baseline_spo2: 0, samples: valid.length };
+    }
+    const avg = (arr, key) => arr.reduce((a, b) => a + safeNumber(b[key], 0), 0) / Math.max(arr.length, 1);
+    return {
+        calibrated: true,
+        baseline_bpm: Number(avg(valid, 'bpm').toFixed(1)),
+        baseline_hrv: Number(avg(valid, 'hrv_rmssd').toFixed(1)),
+        baseline_spo2: Number(avg(valid, 'spo2').toFixed(1)),
+        samples: valid.length
+    };
+}
+
+async function calibrateHeartbeatForQuestions(statusEl) {
+    if (!esp32Device) {
+        heartbeatCalibration = { calibrated: false, baseline_bpm: 0, baseline_hrv: 0, baseline_spo2: 0, samples: 0 };
+        return heartbeatCalibration;
+    }
+
+    statusEl.textContent = 'Calibrating heartbeat for ~5 seconds… keep finger steady';
+    await new Promise(r => setTimeout(r, 5200));
+    heartbeatCalibration = computeCalibration(recentSamples(9000));
+
+    if (heartbeatCalibration.calibrated) {
+        statusEl.textContent = `Calibrated ✓ Baseline BPM ${heartbeatCalibration.baseline_bpm}, HRV ${heartbeatCalibration.baseline_hrv}`;
+    } else {
+        statusEl.textContent = 'Calibration weak — continuing anyway (use stable finger contact for best accuracy)';
+    }
+    return heartbeatCalibration;
+}
+
+function getQuestionPhysioSummary() {
+    const valid = questionPhysioSamples.filter(s => safeNumber(s.bpm, 0) > 0 || safeNumber(s.hrv_rmssd, 0) > 0);
+    const avg = (arr, key) => arr.reduce((a, b) => a + safeNumber(b[key], 0), 0) / Math.max(arr.length, 1);
+
+    const during = {
+        samples: valid.length,
+        avg_bpm: Number(avg(valid, 'bpm').toFixed(1)),
+        max_bpm: Number((valid.length ? Math.max(...valid.map(s => safeNumber(s.bpm, 0))) : 0).toFixed(1)),
+        avg_hrv: Number(avg(valid, 'hrv_rmssd').toFixed(1)),
+        avg_spo2: Number(avg(valid, 'spo2').toFixed(1)),
+    };
+
+    return {
+        calibrated: !!heartbeatCalibration.calibrated,
+        baseline: {
+            bpm: safeNumber(heartbeatCalibration.baseline_bpm, 0),
+            hrv_rmssd: safeNumber(heartbeatCalibration.baseline_hrv, 0),
+            spo2: safeNumber(heartbeatCalibration.baseline_spo2, 0),
+            samples: safeNumber(heartbeatCalibration.samples, 0)
+        },
+        during
+    };
+}
 
 function getOrCreateUserId() {
     let id = localStorage.getItem(USER_ID_KEY);
@@ -1493,7 +1592,11 @@ async function handleBleConnect() {
         char.addEventListener('characteristicvaluechanged', ev => {
             const dec = new TextDecoder('utf-8');
             latestPhysioData = dec.decode(ev.target.value);
-            try { updateSensorUI(JSON.parse(latestPhysioData)); } catch(e){}
+            try {
+                latestPhysioObj = JSON.parse(latestPhysioData);
+                pushPhysioSample(latestPhysioObj);
+                updateSensorUI(latestPhysioObj);
+            } catch(e){}
         });
         esp32Device.addEventListener('gattserverdisconnected', () => {
             toast('Sensor disconnected');
@@ -1515,6 +1618,8 @@ function updateSensorUI(d) {
     const $ = id => document.getElementById(id);
     $('value-eda').textContent  = d.eda_uS?.toFixed(2)  ?? '--';
     $('value-hrv').textContent  = d.hrv_rmssd?.toFixed(2)?? '--';
+    if ($('value-bpm'))  $('value-bpm').textContent = Number.isFinite(Number(d.bpm)) && Number(d.bpm) > 0 ? Number(d.bpm).toFixed(0) : '--';
+    if ($('value-spo2')) $('value-spo2').textContent = Number.isFinite(Number(d.spo2)) && Number(d.spo2) > 0 ? Number(d.spo2).toFixed(0) : '--';
     $('value-temp').textContent = d.temp_c?.toFixed(1)  ?? '--';
     $('value-acc-x').textContent= d.acc_x_g?.toFixed(2) ?? '--';
     $('value-acc-y').textContent= d.acc_y_g?.toFixed(2) ?? '--';
@@ -1571,6 +1676,7 @@ function setupAudio() {
     btn.addEventListener('click', async () => {
         if (!mediaRecorder || mediaRecorder.state === 'inactive') {
             try {
+                await calibrateHeartbeatForQuestions(status);
                 status.textContent = 'Getting microphone…';
                 const stream = await navigator.mediaDevices.getUserMedia({ audio:true, video:false });
                 mediaRecorder = new MediaRecorder(stream);
@@ -1579,12 +1685,25 @@ function setupAudio() {
                 mediaRecorder.onstop = () => {
                     audioBlob = new Blob(audioChunks, { type:'audio/wav' });
                     status.textContent = '✅ Audio recorded';
+                    clearInterval(questionPhysioCaptureTimer);
+                    questionPhysioCaptureTimer = null;
                     stopLiveReaction();
                     stream.getTracks().forEach(t => t.stop());
                     btn.classList.remove('recording');
                     setTimeout(() => showStep(4), 1400);
                 };
                 mediaRecorder.start();
+                questionPhysioSamples = [];
+                questionPhysioCaptureTimer = setInterval(() => {
+                    if (!latestPhysioObj || typeof latestPhysioObj !== 'object') return;
+                    questionPhysioSamples.push({
+                        ts: Date.now(),
+                        bpm: safeNumber(latestPhysioObj.bpm, 0),
+                        hrv_rmssd: safeNumber(latestPhysioObj.hrv_rmssd, 0),
+                        spo2: safeNumber(latestPhysioObj.spo2, 0)
+                    });
+                    if (questionPhysioSamples.length > 220) questionPhysioSamples = questionPhysioSamples.slice(-220);
+                }, 700);
                 status.textContent = 'Recording… tap to stop';
                 btn.classList.add('recording');
                 startLiveReaction(stream);
@@ -1707,6 +1826,7 @@ async function setupAnalyze() {
     form.append('audio_file', audioBlob, 'audio.wav');
     form.append('dass_data', JSON.stringify({ responses: dassAnswers.map(a => a ?? 0) }));
     form.append('physio_data', latestPhysioData);
+    form.append('question_physio_data', JSON.stringify(getQuestionPhysioSummary()));
     form.append('ai_questions', JSON.stringify(aiCheckinQuestions));
     form.append('user_id', userId);
 
@@ -1858,7 +1978,10 @@ document.getElementById('retake-btn').addEventListener('click', () => {
     speechSynthesis?.cancel();
     if (esp32Device?.gatt.connected) esp32Device.gatt.disconnect();
     stopLiveReaction();
-    currentStep=0; esp32Device=null; latestPhysioData='{}';
+    currentStep=0; esp32Device=null; latestPhysioData='{}'; latestPhysioObj={};
+    physioHistory=[]; questionPhysioSamples=[];
+    clearInterval(questionPhysioCaptureTimer); questionPhysioCaptureTimer = null;
+    heartbeatCalibration = { calibrated: false, baseline_bpm: 0, baseline_hrv: 0, baseline_spo2: 0, samples: 0 };
     imageBlob=null; audioBlob=null; mediaRecorder=null; audioChunks=[];
     dassAnswers.fill(null); currentDassQ=0;
     reportContent.innerHTML='';

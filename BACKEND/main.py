@@ -17,7 +17,7 @@ from pathlib import Path
 import uuid
 import tempfile
 from datetime import datetime, timezone
-from typing import List
+from typing import Any, Dict, List, Tuple
 from dotenv import load_dotenv
 
 # --- Configuration ---
@@ -302,6 +302,82 @@ def predict_physio_from_line(line):
     except Exception as e:
         print(f"Physio prediction error: {e}"); return 0.5
 
+def predict_question_heartbeat_stress(question_physio_payload: Any) -> Tuple[float, Dict[str, Any]]:
+    """
+    Uses calibration baseline + during-question heart dynamics.
+    Returns (score_0_to_1, meta_info).
+    """
+    default_meta: Dict[str, Any] = {
+        "used": False,
+        "calibrated": False,
+        "baseline_bpm": 0.0,
+        "baseline_hrv": 0.0,
+        "during_avg_bpm": 0.0,
+        "during_avg_hrv": 0.0,
+        "during_avg_spo2": 0.0,
+        "samples": 0,
+    }
+
+    if not question_physio_payload:
+        return 0.5, default_meta
+
+    try:
+        data_any: Any = json.loads(question_physio_payload) if isinstance(question_physio_payload, str) else question_physio_payload
+        if not isinstance(data_any, dict):
+            return 0.5, default_meta
+
+        data: Dict[str, Any] = dict(data_any)
+        baseline_raw = data.get("baseline", {})
+        during_raw = data.get("during", {})
+        baseline: Dict[str, Any] = baseline_raw if isinstance(baseline_raw, dict) else {}
+        during: Dict[str, Any] = during_raw if isinstance(during_raw, dict) else {}
+
+        calibrated = bool(data.get("calibrated", False))
+        baseline_bpm = float(baseline.get("bpm", 0) or 0)
+        baseline_hrv = float(baseline.get("hrv_rmssd", 0) or 0)
+        during_avg_bpm = float(during.get("avg_bpm", 0) or 0)
+        during_avg_hrv = float(during.get("avg_hrv", 0) or 0)
+        during_avg_spo2 = float(during.get("avg_spo2", 0) or 0)
+        samples = int(during.get("samples", 0) or 0)
+
+        meta = {
+            "used": samples >= 3,
+            "calibrated": calibrated,
+            "baseline_bpm": round(baseline_bpm, 1),
+            "baseline_hrv": round(baseline_hrv, 1),
+            "during_avg_bpm": round(during_avg_bpm, 1),
+            "during_avg_hrv": round(during_avg_hrv, 1),
+            "during_avg_spo2": round(during_avg_spo2, 1),
+            "samples": samples,
+        }
+
+        if samples < 3:
+            return 0.5, meta
+
+        # If calibrated, compare against user baseline.
+        if calibrated and baseline_bpm > 0:
+            bpm_rise = max(0.0, during_avg_bpm - baseline_bpm)
+            bpm_score = float(np.clip(bpm_rise / 30.0, 0.0, 1.0))
+        else:
+            bpm_score = float(np.clip((during_avg_bpm - 70.0) / 45.0, 0.0, 1.0))
+
+        # HRV drop during questions may indicate stress load.
+        if calibrated and baseline_hrv > 0:
+            hrv_drop = max(0.0, baseline_hrv - during_avg_hrv)
+            hrv_score = float(np.clip(hrv_drop / 25.0, 0.0, 1.0))
+        else:
+            hrv_score = float(np.clip((45.0 - during_avg_hrv) / 45.0, 0.0, 1.0))
+
+        spo2_score = 0.0
+        if during_avg_spo2 > 0:
+            spo2_score = float(np.clip((96.0 - during_avg_spo2) / 8.0, 0.0, 1.0))
+
+        score = float(0.5 * bpm_score + 0.4 * hrv_score + 0.1 * spo2_score)
+        return score, meta
+    except Exception as e:
+        print(f"Question heartbeat scoring error: {e}")
+        return 0.5, default_meta
+
 def load_memory_store():
     if not MEMORY_FILE.exists():
         return {}
@@ -485,6 +561,7 @@ async def analyze_stress(
     image_file: UploadFile = File(...),
     audio_file: UploadFile = File(...),
     ai_questions: str = Form(None),
+    question_physio_data: str = Form(None),
     user_id: str = Form(...)
 ):
     if not user_id or len(user_id.strip()) < 3:
@@ -507,7 +584,12 @@ async def analyze_stress(
         voice_tone_score = predict_voice_tone_stress(audio_path)
         blended_audio_score = float(0.7 * audio_score + 0.3 * voice_tone_score)
         survey_score = predict_dass21(json.loads(dass_data)['responses'])
-        physio_score = predict_physio_from_line(physio_data)
+        physio_base_score = predict_physio_from_line(physio_data)
+        question_heartbeat_score, heartbeat_meta = predict_question_heartbeat_stress(question_physio_data)
+        if heartbeat_meta.get("used"):
+            physio_score = float(0.65 * physio_base_score + 0.35 * question_heartbeat_score)
+        else:
+            physio_score = physio_base_score
         
         # ✅ CHANGED: The list of confidences is now a clean list of scores.
         confidences = [facial_score, blended_audio_score, survey_score, physio_score]
@@ -530,6 +612,16 @@ async def analyze_stress(
             question_text = " | ".join(parsed_questions) if parsed_questions else ai_questions
             context_text = f"Questions asked: {question_text}\nUser voice response: {transcribed_text}"
 
+        if heartbeat_meta.get("used"):
+            context_text += (
+                f"\nQuestion-phase physiology: "
+                f"calibrated={heartbeat_meta.get('calibrated')}, "
+                f"baseline_bpm={heartbeat_meta.get('baseline_bpm')}, "
+                f"during_avg_bpm={heartbeat_meta.get('during_avg_bpm')}, "
+                f"baseline_hrv={heartbeat_meta.get('baseline_hrv')}, "
+                f"during_avg_hrv={heartbeat_meta.get('during_avg_hrv')}"
+            )
+
         memory_context = build_memory_context(user_id)
         llm_suggestion = get_llm_suggestion(stress_score_percent, context_text, memory_context)
         
@@ -551,7 +643,11 @@ async def analyze_stress(
             "llm_suggestion": llm_suggestion,
             "coach_audio_b64": coach_audio_b64,
             "voice_tone_score": round(voice_tone_score * 100),
-            "memory_summary": memory_summary
+            "memory_summary": memory_summary,
+            "heartbeat_calibrated": heartbeat_meta.get("calibrated", False),
+            "question_heartbeat_score": round(question_heartbeat_score * 100),
+            "physio_base_score": round(physio_base_score * 100),
+            "physio_final_score": round(physio_score * 100)
         }
     finally:
         if image_path.exists():
