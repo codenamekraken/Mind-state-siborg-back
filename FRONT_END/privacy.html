@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Privacy Policy - Mind-state-siborg</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#080c14"/>
+    <style>
+        :root {
+            --bg: #080c14;
+            --surface: rgba(14, 20, 36, 0.88);
+            --surface-2: rgba(22, 30, 52, 0.66);
+            --border: rgba(120, 160, 255, 0.14);
+            --text-1: #e8edf8;
+            --text-2: #9aa7c9;
+            --text-3: #7182aa;
+            --accent: #6c8fff;
+            --accent-2: #a78bfa;
+            --teal: #2dd4bf;
+        }
+
+        * { box-sizing: border-box; }
+        html, body { margin: 0; min-height: 100%; }
+
+        body {
+            font-family: Inter, "Segoe UI", Roboto, Arial, sans-serif;
+            color: var(--text-1);
+            background: var(--bg);
+            line-height: 1.68;
+            position: relative;
+            padding: 24px;
+        }
+
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background:
+                radial-gradient(circle at 18% 15%, rgba(124,110,247,0.18), transparent 30%),
+                radial-gradient(circle at 80% 18%, rgba(45,212,191,0.12), transparent 26%),
+                radial-gradient(circle at 55% 80%, rgba(108,143,255,0.12), transparent 32%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .page {
+            position: relative;
+            z-index: 1;
+            width: min(980px, 100%);
+            margin: 0 auto;
+        }
+
+        .topbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .brand {
+            font-size: 1.1rem;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            background: linear-gradient(135deg, #ffffff, var(--accent-2), var(--teal));
+            background-clip: text;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .back-link {
+            color: var(--text-2);
+            text-decoration: none;
+            padding: 8px 12px;
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            background: rgba(8, 12, 20, 0.45);
+            font-size: 0.84rem;
+        }
+
+        .hero {
+            background: linear-gradient(180deg, var(--surface), rgba(10, 14, 24, 0.82));
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: clamp(20px, 3vw, 34px);
+            margin-bottom: 14px;
+        }
+
+        h1 {
+            margin: 0 0 8px;
+            font-size: clamp(1.8rem, 4.5vw, 2.7rem);
+            line-height: 1.05;
+            letter-spacing: -0.02em;
+        }
+
+        .meta {
+            margin: 0;
+            color: var(--text-3);
+            font-size: 0.9rem;
+        }
+
+        .intro {
+            margin-top: 14px;
+            color: var(--text-2);
+            max-width: 780px;
+        }
+
+        .grid {
+            display: grid;
+            gap: 12px;
+        }
+
+        .section {
+            background: linear-gradient(180deg, rgba(18,24,40,0.92), rgba(10,14,24,0.76));
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 18px 18px 14px;
+        }
+
+        h2 {
+            margin: 0 0 8px;
+            font-size: 1.05rem;
+            color: #d7dfff;
+        }
+
+        p { margin: 0 0 8px; color: var(--text-2); }
+        ul { margin: 8px 0 0 0; padding-left: 18px; color: var(--text-2); }
+        li { margin-bottom: 6px; }
+        strong { color: var(--text-1); }
+
+        .footer {
+            margin-top: 14px;
+            color: var(--text-3);
+            font-size: 0.9rem;
+            text-align: center;
+            padding-bottom: 24px;
+        }
+
+        @media (max-width: 640px) {
+            body { padding: 14px; }
+            .section { padding: 14px 14px 10px; }
+            .back-link { font-size: 0.8rem; }
+        }
+    </style>
+</head>
+<body>
+<main class="page">
+    <div class="topbar">
+        <div class="brand">Mind-state-siborg</div>
+        <a class="back-link" href="/index.html">← Back to app</a>
+    </div>
+
+    <section class="hero">
+        <h1>Privacy Policy</h1>
+        <p class="meta"><strong>Last Updated:</strong> April 2026</p>
+        <p class="intro">Mind-state-siborg ("we", "our", or "the app") is a mental wellness and stress monitoring application using physiological sensor data, voice input, and facial expression analysis to provide stress insights and emotionally supportive recommendations.</p>
+    </section>
+
+    <section class="grid">
+        <article class="section">
+            <h2>1. Information We Collect</h2>
+            <p>The app may collect and process:</p>
+            <ul>
+                <li><strong>Microphone Data:</strong> Voice analysis and stress detection.</li>
+                <li><strong>Camera Data:</strong> Facial expression analysis.</li>
+                <li><strong>Bluetooth Sensor Data:</strong> Heart rate, EDA, temperature, and motion data.</li>
+                <li><strong>User Input:</strong> Responses and check-in text/audio context.</li>
+                <li><strong>Device Information:</strong> Basic browser/device details for app operation.</li>
+            </ul>
+        </article>
+
+        <article class="section">
+            <h2>2. How We Use Your Information</h2>
+            <ul>
+                <li>Stress level detection and analysis</li>
+                <li>Providing AI-based supportive suggestions</li>
+                <li>Improving app performance and user experience</li>
+                <li>Generating session-level stress insight reports</li>
+            </ul>
+        </article>
+
+        <article class="section">
+            <h2>3. Data Storage</h2>
+            <p>Mind-state-siborg does <strong>not permanently store</strong> raw physiological data, audio recordings, or facial images by default. Data is processed temporarily unless a user explicitly saves report context.</p>
+        </article>
+
+        <article class="section">
+            <h2>4. Data Sharing</h2>
+            <p>We do <strong>not sell, trade, or share</strong> personal data with third parties for advertising or unrelated use. Data is used only for app functionality and analysis.</p>
+        </article>
+
+        <article class="section">
+            <h2>5. Permissions Used</h2>
+            <ul>
+                <li>Camera — facial expression analysis</li>
+                <li>Microphone — voice analysis</li>
+                <li>Bluetooth — physiological sensor connection</li>
+                <li>Internet — AI processing and report generation</li>
+            </ul>
+        </article>
+
+        <article class="section">
+            <h2>6. Data Security</h2>
+            <p>Reasonable safeguards are applied to protect data in transit and at processing time. HTTPS is required for production communication.</p>
+        </article>
+
+        <article class="section">
+            <h2>7. User Control</h2>
+            <p>You may choose not to use camera, microphone, or Bluetooth features. You can stop app use at any time.</p>
+        </article>
+
+        <article class="section">
+            <h2>8. Children’s Privacy</h2>
+            <p>This app is not intended for children under 13. We do not knowingly collect personal data from children.</p>
+        </article>
+
+        <article class="section">
+            <h2>9. Policy Updates</h2>
+            <p>We may update this policy when features or compliance requirements change. Updates are posted on this page.</p>
+        </article>
+
+        <article class="section">
+            <h2>10. Contact</h2>
+            <p>For privacy questions, contact: <strong>your-email@example.com</strong></p>
+        </article>
+    </section>
+
+    <p class="footer">By using Mind-state-siborg, you agree to this Privacy Policy.</p>
+</main>
+</body>
+</html>

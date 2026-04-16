@@ -1,0 +1,43 @@
+{
+  "id": "/index.html",
+  "name": "Mind-state-siborg",
+  "short_name": "MindSiborg",
+  "description": "Mind-state-siborg - Your emotionally intelligent well-being companion.",
+  "start_url": "/index.html",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#1e293b",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon/icon-192x192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icon/icon-512x512.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/icon/screenshot1.png",
+      "sizes": "1600x529",
+      "type": "image/png",
+      "form_factor": "wide"
+    },
+    {
+      "src": "/icon/screenshot2.png",
+      "sizes": "862x1600",
+      "type": "image/png",
+      "form_factor": "narrow"
+    }
+  ],
+  "features": {
+  "bluetooth": true,
+  "camera": true,
+  "microphone": true
+  }
+}
