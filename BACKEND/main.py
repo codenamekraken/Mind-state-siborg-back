@@ -31,6 +31,7 @@ DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 MEMORY_FILE = BASE_DIR / "memory_store.json"
 MAX_MEMORY_ITEMS = 20
 APP_ENV = os.getenv("APP_ENV", "production").lower()
+REQUIRE_MODELS = os.getenv("REQUIRE_MODELS", "false").lower() == "true"
 
 def _parse_allowed_origins() -> List[str]:
     origins = os.getenv("CORS_ORIGINS", "https://mind-state-siborg.netlify.app")
@@ -101,6 +102,8 @@ MODELS_READY = all([
     physio_scaler is not None,
 ])
 
+INFERENCE_MODE = "ml-models" if MODELS_READY else "heuristic-fallback"
+
 # --- Transcription Function ---
 def transcribe_audio_with_deepgram(audio_file_path):
     if not DEEPGRAM_API_KEY:
@@ -158,7 +161,18 @@ def agreement_fusion(confidences):
 
 # ✅ CHANGED: All predict functions now return a single float (stress probability).
 def predict_facial(photo_path):
-    if not facial_model: return 0.5
+    if not facial_model:
+        # Heuristic fallback: lower brightness + high texture variance can indicate strain.
+        try:
+            img = cv2.imread(str(photo_path))
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            brightness = float(np.mean(gray))
+            contrast = float(np.std(gray))
+            brightness_score = np.clip((140.0 - brightness) / 100.0, 0.0, 1.0)
+            contrast_score = np.clip((contrast - 35.0) / 55.0, 0.0, 1.0)
+            return float(0.6 * brightness_score + 0.4 * contrast_score)
+        except Exception:
+            return 0.5
     try:
         img = cv2.imread(str(photo_path))
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -171,7 +185,9 @@ def predict_facial(photo_path):
         print(f"Facial prediction error: {e}"); return 0.5
 
 def predict_audio(audio_file):
-    if not audio_model: return 0.5
+    if not audio_model:
+        # Heuristic fallback delegates to voice tone stress estimator.
+        return predict_voice_tone_stress(audio_file)
     try:
         y, sr = librosa.load(audio_file, sr=22050)
         mfccs = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=38)
@@ -223,7 +239,13 @@ def predict_voice_tone_stress(audio_file):
         return 0.5
 
 def predict_dass21(q_responses):
-    if not all([dass21_model, dass21_scaler]): return 0.5
+    if not all([dass21_model, dass21_scaler]):
+        try:
+            vals = np.array([float(r) for r in q_responses])
+            # DASS-like 0..3 responses -> normalized stress tendency
+            return float(np.clip(np.mean(vals) / 3.0, 0.0, 1.0))
+        except Exception:
+            return 0.5
     try:
         X = np.array([float(r) for r in q_responses]).reshape(1, -1)
         X_scaled = dass21_scaler.transform(X)
@@ -234,7 +256,27 @@ def predict_dass21(q_responses):
         print(f"DASS-21 prediction error: {e}"); return 0.5
 
 def predict_physio_from_line(line):
-    if not all([physio_model, physio_scaler]): return 0.5
+    if not all([physio_model, physio_scaler]):
+        # Heuristic fallback for BLE payload values.
+        try:
+            data = json.loads(line)
+            eda = float(data.get("eda_uS", data.get("eda_raw", 0)))
+            hrv = float(data.get("hrv_rmssd", data.get("bvp_ir_raw", 0)))
+            temp = float(data.get("temp_c", 0))
+            acc_x = float(data.get("acc_x_g", data.get("acc_x_raw", 0)))
+            acc_y = float(data.get("acc_y_g", data.get("acc_y_raw", 0)))
+            acc_z = float(data.get("acc_z_g", data.get("acc_z_raw", 0)))
+            motion = float(np.sqrt(acc_x * acc_x + acc_y * acc_y + acc_z * acc_z))
+
+            eda_score = np.clip((eda - 2.0) / 12.0, 0.0, 1.0)
+            # Higher HRV generally means lower stress.
+            hrv_score = np.clip((45.0 - hrv) / 45.0, 0.0, 1.0)
+            temp_score = np.clip(abs(temp - 36.5) / 2.0, 0.0, 1.0)
+            motion_score = np.clip((motion - 1.0) / 1.5, 0.0, 1.0)
+
+            return float(0.4 * eda_score + 0.35 * hrv_score + 0.15 * temp_score + 0.1 * motion_score)
+        except Exception:
+            return 0.5
     try:
         data = json.loads(line)
         if all(value == 0 for value in data.values()):
@@ -523,10 +565,19 @@ def read_root():
 
 @app.get("/health")
 def health():
+    configured_ok = bool(GROQ_API_KEY) and bool(DEEPGRAM_API_KEY)
+    status = "ok"
+    if REQUIRE_MODELS and not MODELS_READY:
+        status = "degraded"
+    elif not configured_ok:
+        status = "degraded"
+
     return {
-        "status": "ok" if MODELS_READY else "degraded",
+        "status": status,
         "env": APP_ENV,
+        "require_models": REQUIRE_MODELS,
         "models_ready": MODELS_READY,
+        "inference_mode": INFERENCE_MODE,
         "groq_key_configured": bool(GROQ_API_KEY),
         "deepgram_key_configured": bool(DEEPGRAM_API_KEY),
         "cors_origins": ALLOWED_ORIGINS,
