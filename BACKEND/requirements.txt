@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+python-multipart
+tensorflow
+scikit-learn
+opencv-python-headless
+librosa
+requests
+fastapi-cors
+pandas
+python-dotenv

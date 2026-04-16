@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+node_modules/
+videos_photos/
+*.h5
+*.pkl
+*.mp4
