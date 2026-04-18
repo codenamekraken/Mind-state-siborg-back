@@ -17,7 +17,7 @@ from pathlib import Path
 import uuid
 import tempfile
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 from dotenv import load_dotenv
 
 # --- Configuration ---
@@ -25,7 +25,7 @@ BASE_DIR = Path(__file__).parent.resolve()
 ROOT_DIR = BASE_DIR.parent
 load_dotenv(ROOT_DIR / ".env")
 load_dotenv(BASE_DIR / ".env")
-MODELS_DIR = BASE_DIR / "saved_models"
+MODELS_DIR = Path(os.getenv("MODELS_DIR", str(BASE_DIR / "saved_models"))).resolve()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 MEMORY_FILE = BASE_DIR / "memory_store.json"
@@ -80,18 +80,49 @@ app.add_middleware(
 )
 
 # --- Model Loading ---
-try:
-    facial_model = tf.keras.models.load_model(MODELS_DIR / "facial_model.h5")
-    audio_model = tf.keras.models.load_model(MODELS_DIR / "audio_model.h5")
-    dass21_model = tf.keras.models.load_model(MODELS_DIR / "dass211_model.h5")
-    physio_model = tf.keras.models.load_model(MODELS_DIR / "physio_model.h5")
-    dass21_scaler = joblib.load(MODELS_DIR / "dass211_scaler.pkl")
-    physio_scaler = joblib.load(MODELS_DIR / 'physio_scaler.pkl')
+def _load_keras_model(label: str, candidates: List[str]):
+    for filename in candidates:
+        path = MODELS_DIR / filename
+        if not path.exists():
+            continue
+        try:
+            model = tf.keras.models.load_model(path)
+            print(f"✅ Loaded {label}: {path.name}")
+            return model
+        except Exception as e:
+            print(f"⚠️ Failed loading {label} from {path.name}: {e}")
+    print(f"⚠️ {label} not found in {MODELS_DIR}")
+    return None
+
+
+def _load_joblib_file(label: str, candidates: List[str]) -> Optional[Any]:
+    for filename in candidates:
+        path = MODELS_DIR / filename
+        if not path.exists():
+            continue
+        try:
+            obj = joblib.load(path)
+            print(f"✅ Loaded {label}: {path.name}")
+            return obj
+        except Exception as e:
+            print(f"⚠️ Failed loading {label} from {path.name}: {e}")
+    print(f"⚠️ {label} not found in {MODELS_DIR}")
+    return None
+
+
+print(f"📦 Model search directory: {MODELS_DIR}")
+facial_model = _load_keras_model("facial_model", ["facial_model.h5"])
+audio_model = _load_keras_model("audio_model", ["audio_model.h5"])
+dass21_model = _load_keras_model("survey_model", ["dass211_model.h5", "dass21_model.h5", "survey_model.h5"])
+physio_model = _load_keras_model("physio_model", ["physio_model.h5"])
+
+dass21_scaler = _load_joblib_file("survey_scaler", ["dass211_scaler.pkl", "dass21_scaler.pkl", "survey_scaler.pkl"])
+physio_scaler = _load_joblib_file("physio_scaler", ["physio_scaler.pkl", "physiological_scaler.pkl"])
+
+if all([facial_model, audio_model, dass21_model, physio_model, dass21_scaler, physio_scaler]):
     print("✅ All models and scalers loaded successfully.")
-except Exception as e:
-    print(f"❌ ERROR loading models/scalers: {e}")
-    facial_model = audio_model = dass21_model = physio_model = None
-    dass21_scaler = physio_scaler = None
+else:
+    print("⚠️ Some model artifacts are missing. Backend will use hybrid fallback where needed.")
 
 MODELS_READY = all([
     facial_model is not None,
