@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "app.netlify.mind_state_siborg.twa",
+      "sha256_cert_fingerprints": [
+        "94:D9:30:5A:64:CA:63:68:3A:14:24:4F:6F:9C:42:F9:34:1D:ED:D3:45:C7:8F:CA:F3:EF:06:56:61:22:EF:E1"
+      ]
+    }
+  }
+]
