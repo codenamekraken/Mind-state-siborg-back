@@ -37,11 +37,16 @@ const float ADC_VOLTAGE = 3.3;
 // --- HRV Calculation Variables ---
 const int IBI_BUFFER_SIZE = 30;
 const int MIN_IBI_FOR_CALCULATION = 5;
+const int MIN_VALID_IBI_MS = 220;   // more permissive startup lock
+const int MAX_VALID_IBI_MS = 2400;  // tolerate slower first lock-in
+const long FINGER_IR_THRESHOLD = 1000;
 long ibiBuffer[IBI_BUFFER_SIZE];
 int ibiCount = 0;
 long lastBeatTime = 0;
 float beatsPerMinute = 0.0;
 float lastValidRmssd = 0.0;
+int lastStableBpm = 0;
+unsigned long lastValidBpmMs = 0;
 
 // --- MAX30105 BPM/SpO2 Variables ---
 float bpmSmoothed = 0.0;
@@ -58,6 +63,8 @@ bool hasMAX30105 = false;
 // --- Custom Beat Detector Variables ---
 long lastIrValue = 0;
 bool isRising = false;
+bool fingerPresent = false;
+unsigned long lastFallbackPeakTime = 0;
 
 // --- BLE Definitions ---
 #define SERVICE_UUID        "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
@@ -73,6 +80,16 @@ DallasTemperature tempSensor(&oneWire);
 // --- Timing Control ---
 unsigned long lastDataSend = 0;
 const long dataSendInterval = 1000;
+unsigned long lastPpgDebugPrint = 0;
+unsigned long lastPpgSampleMs = 0;
+unsigned long lastBleRestartMs = 0;
+volatile bool bleRestartRequested = false;
+const unsigned long PPG_DROPOUT_GRACE_MS = 1500;
+const unsigned long BPM_HOLD_MS = 6000;
+const unsigned long FALLBACK_REFRACTORY_MS = 260;
+
+// For regular demo prints
+unsigned long lastDemoPrintMs = 0;
 
 // --- Other Sensor Value Storage ---
 static float eda_uS = 0.0;
@@ -83,7 +100,9 @@ static float temp_c = 0.0;
 class MyServerCallbacks: public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) {
       deviceConnected = true;
+      bleRestartRequested = false;
       digitalWrite(LED_BUILTIN, HIGH);
+      Serial.println("📶 BLE client connected");
     }
     void onDisconnect(BLEServer* pServer) {
       deviceConnected = false;
@@ -91,7 +110,8 @@ class MyServerCallbacks: public BLEServerCallbacks {
       ibiCount = 0;
       lastBeatTime = 0;
       lastValidRmssd = 0.0;
-      BLEDevice::startAdvertising();
+      bleRestartRequested = true;
+      Serial.println("📶 BLE client disconnected, scheduling advertising restart");
     }
 };
 
@@ -107,14 +127,24 @@ void updateSpO2(long ir, long red);
 // ==========================================================================
 void setup() {
   Serial.begin(115200);
-  while(!Serial);
-  Serial.println("\n\n--- Mind-state-siborg ESP32 (Final Working Code) ---");
+  // Avoid blocking forever when USB serial is not attached
+  unsigned long serialWaitStart = millis();
+  while (!Serial && (millis() - serialWaitStart < 1500)) {
+    delay(10);
+  }
+  Serial.println("\n\n==============================");
+  Serial.println(" Mind-state-siborg ESP32 Sensor");
+  Serial.println("==============================");
+  Serial.println("Live sensor values will print below.\n");
 
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, LOW);
   
   // User-requested I2C pins
   Wire.begin(21, 22);
+  // Stability: 100kHz I2C is far more tolerant to wiring/noise than 400kHz
+  Wire.setClock(100000);
+  Wire.setTimeOut(50);
 
   hasMPU = checkI2Cdevice(MPU_I2C_ADDR, "MPU6050");
   hasMAX30105 = checkI2Cdevice(MAX30105_I2C_ADDR, "MAX3010x");
@@ -129,11 +159,11 @@ void setup() {
   }
 
   // --- Initialize MAX30102
-  if (hasMAX30105 && particleSensor.begin(Wire, I2C_SPEED_FAST)) {
+  if (hasMAX30105 && particleSensor.begin(Wire, I2C_SPEED_STANDARD)) {
     // Tuned close to your older stable profile
-    particleSensor.setup(75, 8, 2, 200, 411, 8192);
-    particleSensor.setPulseAmplitudeIR(0x40);
-    particleSensor.setPulseAmplitudeRed(0x40);
+    particleSensor.setup(75, 4, 2, 100, 411, 4096);
+    particleSensor.setPulseAmplitudeIR(0x5F);
+    particleSensor.setPulseAmplitudeRed(0x5F);
     particleSensor.setPulseAmplitudeGreen(0);
     particleSensor.clearFIFO();
     Serial.println("✅ MAX30105 initialized.");
@@ -144,6 +174,10 @@ void setup() {
   
   // --- Initialize Other Sensors
   tempSensor.begin();
+  // Non-blocking DS18B20 to prevent long loop stalls during HR detection
+  tempSensor.setResolution(10);
+  tempSensor.setWaitForConversion(false);
+  tempSensor.requestTemperatures();
   analogReadResolution(12);
 
   // --- Initialize BLE
@@ -153,9 +187,17 @@ void setup() {
   BLEService *pService = pServer->createService(SERVICE_UUID);
   pCharacteristic = pService->createCharacteristic(CHARACTERISTIC_UUID, BLECharacteristic::PROPERTY_NOTIFY);
   pCharacteristic->addDescriptor(new BLE2902());
+  pCharacteristic->setValue("{}");
   pService->start();
-  BLEDevice::getAdvertising()->addServiceUUID(SERVICE_UUID);
+
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->setScanResponse(true);
+  // Improves compatibility with many Android phones and browsers
+  pAdvertising->setMinPreferred(0x06);
+  pAdvertising->setMinPreferred(0x12);
   BLEDevice::startAdvertising();
+  Serial.println("📡 BLE advertising as: Mind-state-siborg_Device");
 
   Serial.println("\n✅ Setup Complete. Ready to connect.");
 }
@@ -164,24 +206,54 @@ void setup() {
 //                                 LOOP
 // ==========================================================================
 void loop() {
+  if (bleRestartRequested && (millis() - lastBleRestartMs) > 120) {
+    BLEDevice::startAdvertising();
+    lastBleRestartMs = millis();
+    bleRestartRequested = false;
+    Serial.println("📡 BLE advertising restarted");
+  }
+
   long irValue = 0;
   long redValue = 0;
+  bool hasNewPpgSample = false;
   if (hasMAX30105) {
-    irValue = particleSensor.getIR();
-    redValue = particleSensor.getRed();
+    particleSensor.check();
+    if (particleSensor.available()) {
+      irValue = particleSensor.getFIFOIR();
+      redValue = particleSensor.getFIFORed();
+      particleSensor.nextSample();
+      hasNewPpgSample = true;
+      lastPpgSampleMs = millis();
+    }
   }
 
   // --- Finger Detection ---
-  if (irValue < 10000) {
+  const bool ppgStale = (lastPpgSampleMs > 0) && ((millis() - lastPpgSampleMs) > PPG_DROPOUT_GRACE_MS);
+  const bool weakSignal = hasNewPpgSample && (irValue < FINGER_IR_THRESHOLD);
+
+  if (ppgStale || weakSignal) {
+    if (fingerPresent) {
+      Serial.println("🖐️ Finger removed / weak signal.");
+    }
+    fingerPresent = false;
+
     // Reset if finger is removed
     if (ibiCount > 0) {
         lastValidRmssd = 0.0;
         ibiCount = 0;
     }
     isRising = false; // Reset beat detector
+    lastBeatTime = 0;
+    lastFallbackPeakTime = 0;
+    bpmSmoothed = 0.0;
     bpmOut = 0;
     spo2Out = 0;
   } else {
+    if (!fingerPresent) {
+      Serial.println("✅ Finger detected. Syncing beat timing...");
+    }
+    fingerPresent = true;
+
     bool beatDetected = checkForBeat(irValue); // library detector from heartRate.h
 
     // --- ✅ NEW BEAT DETECTION ALGORITHM ---
@@ -191,24 +263,35 @@ void loop() {
     
     // If the signal was rising and has just started to fall, we have found a peak.
     if (irValue < lastIrValue && isRising) {
-        isRising = false; // Reset for the next peak
-      beatDetected = true; // fallback detector
+      isRising = false; // Reset for the next peak
+      unsigned long now = millis();
+      // Fallback detector with only a refractory guard; avoid rejecting valid beats
+      if (!beatDetected && (now - lastFallbackPeakTime) >= FALLBACK_REFRACTORY_MS) {
+        beatDetected = true;
+        lastFallbackPeakTime = now;
+      }
 
     }
 
     if (beatDetected) {
 
         long currentTime = millis();
+      if (lastBeatTime == 0) {
+        // First beat after finger placement: initialize baseline timing
+        lastBeatTime = currentTime;
+      } else {
         long delta = currentTime - lastBeatTime;
-        
+
         // Check if the time between beats is reasonable (30-240 BPM)
-        if (delta > 250 && delta < 2000) {
-            lastBeatTime = currentTime; // Log the time of this valid beat
+        if (delta >= MIN_VALID_IBI_MS && delta <= MAX_VALID_IBI_MS) {
+        lastBeatTime = currentTime; // Log the time of this valid beat
             beatsPerMinute = 60000.0 / (float)delta;
             if (beatsPerMinute >= 45.0 && beatsPerMinute <= 180.0) {
               if (bpmSmoothed <= 0.0) bpmSmoothed = beatsPerMinute;
               else bpmSmoothed = 0.85 * bpmSmoothed + 0.15 * beatsPerMinute;
               bpmOut = (int)(bpmSmoothed + 0.5);
+              lastStableBpm = bpmOut;
+              lastValidBpmMs = millis();
             }
             
             Serial.println("******************************************");
@@ -220,7 +303,12 @@ void loop() {
               lastValidRmssd = calculateRMSSD(ibiCount);
               Serial.println("  - NEW RMSSD: " + String(lastValidRmssd) + " ms");
             }
+            } else if (delta > (MAX_VALID_IBI_MS + 1000)) {
+              // Resync timer if signal was lost for too long
+              lastBeatTime = currentTime;
+            }
         }
+      }
     }
 
         updateSpO2(irValue, redValue);
@@ -228,6 +316,34 @@ void loop() {
   lastIrValue = irValue; // Update the last value for the next loop
 
   // --- Data Sending Logic ---
+  if (bpmOut == 0 && lastStableBpm > 0 && (millis() - lastValidBpmMs) <= BPM_HOLD_MS) {
+    bpmOut = lastStableBpm;
+  }
+
+  // Print a summary line every second, even if not connected
+  if ((millis() - lastDemoPrintMs) >= 1000) {
+    Serial.print("[SENSORS]  ");
+    Serial.print("TEMP: ");
+    if (temp_c > 10.0 && temp_c < 50.0) Serial.print(temp_c, 2);
+    else Serial.print("N/A");
+    Serial.print("  BPM: ");
+    if (bpmOut > 0) Serial.print(bpmOut);
+    else Serial.print("N/A");
+    Serial.print("  SpO2: ");
+    if (spo2Out > 0) Serial.print(spo2Out);
+    else Serial.print("N/A");
+    Serial.print("  HRV: ");
+    if (lastValidRmssd > 0) Serial.print(lastValidRmssd, 2);
+    else Serial.print("N/A");
+    Serial.print("  EDA: ");
+    Serial.print(eda_uS, 2);
+    Serial.println();
+    if (!(temp_c > 10.0 && temp_c < 50.0)) {
+      Serial.println("[WARN] DS18B20 temperature sensor not detected or invalid reading!");
+    }
+    lastDemoPrintMs = millis();
+  }
+
   if (deviceConnected && (millis() - lastDataSend >= dataSendInterval)) {
     processOtherSensors();
 
@@ -245,12 +361,20 @@ void loop() {
     serializeJson(doc, output);
     pCharacteristic->setValue(output.c_str());
     pCharacteristic->notify();
+
+    if ((millis() - lastPpgDebugPrint) >= 2000) {
+      Serial.println("4c8 PPG debug -> IR:" + String(irValue) + " RED:" + String(redValue) +
+                     " BPM:" + String(bpmOut) + " HRV:" + String(lastValidRmssd) +
+                     " FINGER:" + String(fingerPresent ? "1" : "0") +
+                     " RAWBEAT:" + String(beatDetected ? "1" : "0"));
+      lastPpgDebugPrint = millis();
+    }
     
     lastDataSend = millis();
   }
   
-  // A small delay is still good practice to prevent the loop from running too aggressively
-  delay(10); 
+  // Small delay to keep loop responsive for beat detection
+  delay(5); 
 }
 
 // ==========================================================================
@@ -277,12 +401,12 @@ void processOtherSensors() {
     acc_z_g = 0.0;
   }
 
-  // DS18B20
-  tempSensor.requestTemperatures();
+  // DS18B20 (non-blocking mode)
   float raw_temp = tempSensor.getTempCByIndex(0);
   if (raw_temp != DEVICE_DISCONNECTED_C) {
     temp_c = raw_temp;
   }
+  tempSensor.requestTemperatures();
 
   // GSR
   int raw_eda = analogRead(GSR_PIN);
