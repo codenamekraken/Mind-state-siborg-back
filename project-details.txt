@@ -1,0 +1,322 @@
+Mind-state-siborg — Project Details
+===================================
+
+1) Project Summary
+------------------
+Mind-state-siborg is a multimodal emotional support companion system that reads a user’s physiological signals, face, voice, and questionnaire answers to estimate stress and generate a calm, human-like response.
+
+It is designed as a privacy-first wellness check-in flow, not a diagnosis tool. The system combines hardware sensing, web-based interaction, backend AI analysis, memory tracking, and spoken feedback to create a full end-to-end mental wellness experience.
+
+2) What the Project Can Do
+--------------------------
+- Detect stress-related patterns from multiple sources:
+  - body/physiological signals
+  - facial expression
+  - voice tone and speech transcript
+  - DASS-21 questionnaire responses
+- Calculate a combined stress score and label.
+- Give a short empathetic AI response.
+- Speak the response aloud using TTS.
+- Keep memory of previous check-ins per user.
+- Show live sensor values in the web app.
+- Show a serial monitor/debug panel for troubleshooting.
+- Support BLE sensor pairing from ESP32 to the web app.
+- Support a guided check-in flow suitable for demos, labs, and hackathons.
+
+3) Main Workflow
+----------------
+Step-by-step user flow:
+
+1. Sensor connection
+   - The web app searches for the ESP32 BLE device.
+   - The ESP32 advertises as: Mind-state-siborg_Device.
+   - Once connected, the frontend listens for live sensor notifications.
+
+2. Face capture
+   - The user captures a face image from the browser camera.
+   - The backend analyzes the image for stress-related facial cues.
+
+3. Voice capture
+   - The user answers AI-generated check-in questions by voice.
+   - The browser records audio.
+   - Deepgram is used for transcription.
+   - Voice tone is also analyzed as a stress signal.
+
+4. DASS-21 questionnaire
+   - The user completes the psychological questionnaire.
+   - Responses are sent to the backend for scoring.
+
+5. Physio analysis
+   - Live BLE data from ESP32 is included.
+   - The backend combines raw physiologic input and the question-phase heart data.
+
+6. AI analysis and response
+   - Scores from all sources are fused.
+   - Groq LLM creates a short supportive response.
+   - Deepgram TTS turns the response into speech.
+
+7. Memory update
+   - The system stores a check-in summary for the user_id.
+   - Future check-ins can show trend and history.
+
+4) Hardware Used
+----------------
+Main hardware:
+
+- ESP32
+  - BLE communication with web app
+  - Sends live sensor packets
+  - Serves as the sensor hub
+
+- MAX30105 sensor module
+  - Heart rate / pulse / SpO2-related optical readings
+  - Used for BPM and HRV estimation
+
+- DS18B20 temperature sensor
+  - Body/skin temperature reading
+
+- GSR sensor
+  - Skin conductance / electrodermal activity signal
+  - Helpful for arousal/stress estimation
+
+- Optional MPU6050
+  - Accelerometer data for movement/context
+  - If present, adds motion context
+
+- LED on ESP32
+  - Visual connection/status indicator
+
+Wiring and pins used in the current firmware:
+- I2C SDA = 21
+- I2C SCL = 22
+- GSR pin = 36
+- DS18B20 one-wire pin = 4
+- LED pin = 2
+
+BLE identifiers:
+- Service UUID: 6e400001-b5a3-f393-e0a9-e50e24dcca9e
+- Characteristic UUID: 6e400003-b5a3-f393-e0a9-e50e24dcca9e
+
+5) Software Used
+----------------
+Frontend:
+- HTML5
+- CSS3
+- Vanilla JavaScript
+- Web Bluetooth API
+- Web camera and microphone APIs
+- PWA service worker
+- Netlify deployment
+
+Backend:
+- Python
+- FastAPI
+- Uvicorn
+- CORS middleware
+- File upload handling with FastAPI
+
+Python libraries used in backend:
+- TensorFlow / Keras
+- NumPy
+- Pandas
+- Joblib
+- OpenCV
+- Librosa
+- Requests
+- python-dotenv
+- pathlib / tempfile / uuid / json / re
+
+AI services and APIs:
+- Groq API for LLM-generated supportive replies
+- Deepgram API for speech-to-text transcription and text-to-speech audio generation
+
+Deployment:
+- Frontend hosted on Netlify
+- Backend hosted on Render
+
+6) AI / ML Used
+---------------
+The system uses multiple AI and ML layers:
+
+A. Facial emotion / stress model
+- A CNN-based image model in the backend
+- Input: face image from browser
+- Output: stress probability from facial cues
+
+B. Audio stress model
+- A deep learning audio model using MFCC features
+- Input: recorded voice audio
+- Output: stress probability from speech characteristics
+
+C. Voice tone heuristic
+- Additional heuristic score based on pitch variability and vocal energy
+- Helps when the audio model is missing or uncertain
+
+D. DASS-21 model
+- Questionnaire-based stress estimation
+- Uses user responses from the DASS-21 scale
+
+E. Physiological model
+- Uses BLE sensor values from ESP32
+- Includes EDA, HRV, temperature, accelerometer values, BPM, and SpO2 where available
+
+F. Question-phase heartbeat calibration
+- The frontend collects heart-related readings during the voice-question stage
+- Backend combines baseline physiologic data and question-phase physiologic data
+- Produces:
+  - heartbeat_calibrated
+  - question_heartbeat_score
+  - physio_base_score
+  - physio_final_score
+
+G. LLM companion layer
+- Groq LLM writes the final supportive text
+- Style: empathetic, short, natural, not clinical
+- Purpose: emotional support only, not diagnosis
+
+H. Speech output
+- Deepgram TTS converts the LLM reply into spoken audio
+
+7) Backend API Endpoints
+------------------------
+Important endpoints exposed by the backend:
+
+- GET /
+  - simple backend running status
+
+- GET /health
+  - returns environment and configuration status
+  - includes:
+    - status
+    - env
+    - require_models
+    - models_ready
+    - inference_mode
+    - groq_key_configured
+    - deepgram_key_configured
+    - cors_origins
+
+- POST /analyze
+  - main multimodal analysis endpoint
+  - accepts:
+    - image_file
+    - audio_file
+    - dass_data
+    - physio_data
+    - ai_questions
+    - question_physio_data
+    - user_id
+  - returns:
+    - stress_level
+    - stress_score_percent
+    - transcribed_text
+    - llm_suggestion
+    - coach_audio_b64
+    - voice_tone_score
+    - memory_summary
+    - heartbeat_calibrated
+    - question_heartbeat_score
+    - physio_base_score
+    - physio_final_score
+
+- GET /ai-questions
+  - returns generated check-in questions for the voice step
+
+- GET /memory/{user_id}
+  - returns stored check-in summary and recent entries
+
+8) How the Scoring Works
+------------------------
+The backend fuses multiple stress estimates.
+
+Inputs:
+- facial_score
+- audio_score
+- voice_tone_score
+- survey_score from DASS-21
+- physio_base_score from BLE and sensor data
+- question_heartbeat_score from question-phase physiologic data
+
+Fusion logic:
+- audio stress uses a blend of model output and voice tone heuristic
+- physio stress can be boosted by question-phase heartbeat data if available
+- final stress score is computed using agreement/fusion logic
+- the result becomes a percentage and a label such as:
+  - Stressed
+  - Not Stressed
+
+9) Frontend Features
+--------------------
+The web app includes:
+- Beautiful PWA-style UI
+- Sensor connect step
+- Camera capture step
+- Voice recording step
+- DASS questionnaire step
+- Reveal/report step
+- Live reaction meter during voice capture
+- Stress report card with score gauge
+- Memory tracking display
+- Debug / serial monitor panel for troubleshooting
+- BLE connection logs and sensor logs
+
+The frontend also sends the following to the backend:
+- image file
+- audio file
+- DASS responses
+- current physio data
+- question-phase physio summary
+- AI question list
+- user_id
+
+10) Why This Project Is Useful
+------------------------------
+Use cases:
+- Hackathon demo for mental wellness AI
+- Student project on multimodal AI
+- Early stress-awareness prototype
+- Wellness companion prototype for campus use
+- Research demo for sensor fusion and affective computing
+- Web + hardware + AI showcase project
+
+Benefits:
+- Uses multiple signals instead of one weak signal
+- Works in browser, so it is easy to demo
+- Gives immediate feedback and supportive language
+- Keeps a memory of past check-ins
+- Can be extended into mobile app or clinical research prototype
+
+11) Project Strengths for Hackathon Pitch
+-----------------------------------------
+- Full-stack project: hardware + frontend + backend + AI
+- Real-time BLE sensor streaming
+- Multiple AI modalities fused together
+- Human-like emotional support output
+- Memory and trend tracking
+- Production-style deployment on Netlify and Render
+- Great demo value because the app looks polished and interactive
+
+12) Current Technical Notes
+---------------------------
+- The backend uses FastAPI, not Flask.
+- If model files are not available, the backend can fall back to heuristic scoring.
+- Web Bluetooth works best in Chrome or Edge over HTTPS.
+- The ESP32 firmware was refined to improve sensor stability, BLE advertising, and beat detection.
+- The project currently supports live sensor debug logs from the frontend.
+
+13) Output Summary
+------------------
+When a user completes a check-in, the system can produce:
+- overall stress score
+- stress label
+- transcript of speech
+- supportive LLM response
+- spoken audio response
+- voice tone score
+- memory summary
+- heartbeat calibration info
+- physiologic base and final scores
+
+14) Short One-Line Pitch
+------------------------
+Mind-state-siborg is a privacy-first multimodal AI companion that fuses hardware sensor data, facial cues, voice, and questionnaire answers to estimate stress and respond with calm, human-like support.

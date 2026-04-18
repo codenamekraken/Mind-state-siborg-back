@@ -942,6 +942,108 @@
         }
         #toast.show { transform: translateX(-50%) translateY(0); }
 
+        /* ─── DEBUG / SERIAL MONITOR ─── */
+        #debug-monitor {
+            position: fixed;
+            bottom: 0; right: 0; left: 0;
+            background: var(--bg);
+            border-top: 1px solid var(--border-glow);
+            backdrop-filter: blur(20px);
+            max-height: 350px;
+            display: flex;
+            flex-direction: column;
+            z-index: 1000;
+            box-shadow: 0 -8px 32px rgba(0,0,0,0.4);
+            transform: translateY(100%);
+            transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        #debug-monitor.show { transform: translateY(0); }
+
+        .debug-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+        .debug-title {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--accent);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .debug-title svg {
+            width: 16px; height: 16px;
+            fill: currentColor;
+        }
+        .debug-controls {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+        }
+        .debug-btn {
+            padding: 6px 10px;
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text-2);
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .debug-btn:hover {
+            border-color: var(--border-glow);
+            color: var(--accent);
+        }
+
+        #debug-logs {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px 12px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.75rem;
+            line-height: 1.5;
+            color: var(--text-2);
+        }
+        .debug-log-line {
+            padding: 2px 0;
+            word-break: break-all;
+            opacity: 0.9;
+            animation: slideIn 0.2s ease;
+        }
+        .debug-log-line.info { color: var(--accent); }
+        .debug-log-line.success { color: var(--green); }
+        .debug-log-line.error { color: var(--red); }
+        .debug-log-line.sensor { color: var(--teal); }
+        @keyframes slideIn { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: translateX(0); } }
+
+        #debug-toggle {
+            position: fixed;
+            bottom: 20px; right: 20px;
+            width: 48px; height: 48px;
+            border-radius: 50%;
+            background: var(--violet-dim);
+            border: 2px solid var(--accent);
+            color: var(--accent);
+            font-size: 1.2rem;
+            cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            z-index: 999;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 20px rgba(124, 110, 247, 0.3);
+        }
+        #debug-toggle:hover {
+            transform: scale(1.1);
+            box-shadow: 0 6px 28px rgba(124, 110, 247, 0.5);
+        }
+        #debug-toggle.active {
+            background: var(--accent);
+            color: var(--bg);
+        }
+
         /* ─── UTIL ─── */
         .hidden { display: none !important; }
         .text-center { text-align: center; }
@@ -1082,6 +1184,22 @@
 </div>
 
 <div id="toast"></div>
+
+<!-- DEBUG / SERIAL MONITOR -->
+<button id="debug-toggle" title="Toggle Debug Monitor">🔧</button>
+<div id="debug-monitor">
+    <div class="debug-header">
+        <div class="debug-title">
+            <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/></svg>
+            Serial Monitor / Debug Logs
+        </div>
+        <div class="debug-controls">
+            <button class="debug-btn" id="debug-clear">Clear</button>
+            <button class="debug-btn" id="debug-close">Close</button>
+        </div>
+    </div>
+    <div id="debug-logs"></div>
+</div>
 
 <!-- ─── TEMPLATES ─── -->
 
@@ -1312,6 +1430,45 @@ const stepInstructions = [
 
 const stepIcons = ['👋','📡','📸','🎤','🤔','✨','🧘','📊'];
 const TOTAL_STEPS = 6; // 1-6
+
+// ── DEBUG / SERIAL MONITOR ──
+const DEBUG = {
+    logs: [],
+    maxLogs: 300,
+    log(msg, type = 'info') {
+        const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const line = `[${timestamp}] ${msg}`;
+        this.logs.push({ msg: line, type });
+        if (this.logs.length > this.maxLogs) this.logs.shift();
+        this.render();
+    },
+    render() {
+        const logsEl = document.getElementById('debug-logs');
+        if (!logsEl) return;
+        logsEl.innerHTML = this.logs.map(l => `<div class="debug-log-line ${l.type}">${l.msg}</div>`).join('');
+        logsEl.scrollTop = logsEl.scrollHeight;
+    }
+};
+
+// Setup debug UI
+document.getElementById('debug-toggle').addEventListener('click', e => {
+    const monitor = document.getElementById('debug-monitor');
+    const toggle = document.getElementById('debug-toggle');
+    monitor.classList.toggle('show');
+    toggle.classList.toggle('active');
+});
+
+document.getElementById('debug-close').addEventListener('click', () => {
+    document.getElementById('debug-monitor').classList.remove('show');
+    document.getElementById('debug-toggle').classList.remove('active');
+});
+
+document.getElementById('debug-clear').addEventListener('click', () => {
+    DEBUG.logs = [];
+    DEBUG.render();
+});
+
+DEBUG.log('🚀 App initialized', 'success');
 
 function safeNumber(v, fallback = 0) {
     const n = Number(v);
@@ -1567,8 +1724,11 @@ function toast(msg, dur=2200) {
 function setupSensor() {
     contentArea.querySelector('#connect-btn').addEventListener('click', handleBleConnect);
     contentArea.querySelector('#skip-sensor-btn').addEventListener('click', () => {
-        if (esp32Device?.gatt.connected) esp32Device.gatt.disconnect();
-        esp32Device = null;
+        // If connected, keep BLE alive for next steps (Face/Audio).
+        // Only skip connection when no device is connected.
+        if (!esp32Device?.gatt?.connected) {
+            esp32Device = null;
+        }
         showStep(2);
     });
 }
@@ -1576,19 +1736,34 @@ function setupSensor() {
 async function handleBleConnect() {
     const btn = contentArea.querySelector('#connect-btn');
     const status = contentArea.querySelector('#sensor-status');
-    if (!navigator.bluetooth) { status.textContent = "Web Bluetooth not available here."; return; }
+    if (!navigator.bluetooth) { 
+        const httpsCheck = window.location.protocol === 'https:' ? 'HTTPS ✓' : 'HTTP ✗ (Need HTTPS)';
+        DEBUG.log(`❌ Web Bluetooth not available. Protocol: ${httpsCheck}`, 'error');
+        status.textContent = "Web Bluetooth not available. Use HTTPS or Chrome on localhost."; 
+        return; 
+    }
     try {
         btn.textContent = "Searching…"; btn.disabled = true;
         status.textContent = "Select your Mind-state-siborg sensor…"; status.style.color = 'var(--teal)';
+        DEBUG.log('🔍 Starting BLE device search...', 'info');
+        DEBUG.log(`   Protocol: ${window.location.protocol}`, 'sensor');
+        DEBUG.log(`   Host: ${window.location.hostname}`, 'sensor');
         esp32Device = await navigator.bluetooth.requestDevice({
-            filters: [{ name:'Mind-state-siborg_Device' }, { services:[ESP32_SERVICE_UUID] }],
+            filters: [
+                { name:'Mind-state-siborg_Device', services:[ESP32_SERVICE_UUID] },
+                { namePrefix:'Mind-state-siborg', services:[ESP32_SERVICE_UUID] },
+                { services:[ESP32_SERVICE_UUID] }
+            ],
             optionalServices: [ESP32_SERVICE_UUID]
         });
+        DEBUG.log(`📱 Found device: ${esp32Device.name}`, 'success');
         status.textContent = "Connecting…";
+        DEBUG.log('🔗 Connecting to GATT server...', 'info');
         const server = await esp32Device.gatt.connect();
         const svc    = await server.getPrimaryService(ESP32_SERVICE_UUID);
         const char   = await svc.getCharacteristic(ESP32_CHAR_UUID);
         await char.startNotifications();
+        DEBUG.log('📡 Notifications started', 'success');
         char.addEventListener('characteristicvaluechanged', ev => {
             const dec = new TextDecoder('utf-8');
             latestPhysioData = dec.decode(ev.target.value);
@@ -1596,9 +1771,11 @@ async function handleBleConnect() {
                 latestPhysioObj = JSON.parse(latestPhysioData);
                 pushPhysioSample(latestPhysioObj);
                 updateSensorUI(latestPhysioObj);
-            } catch(e){}
+                DEBUG.log(`📊 BLE: BPM=${latestPhysioObj.bpm ?? '?'} SpO₂=${latestPhysioObj.spo2 ?? '?'} HRV=${latestPhysioObj.hrv_rmssd?.toFixed(1) ?? '?'}`, 'sensor');
+            } catch(e){ DEBUG.log(`⚠️ JSON parse error: ${e.message}`, 'error'); }
         });
         esp32Device.addEventListener('gattserverdisconnected', () => {
+            DEBUG.log('⛔ Sensor disconnected', 'error');
             toast('Sensor disconnected');
             esp32Device = null;
             contentArea.querySelector('#ble-data-container')?.classList.add('hidden');
@@ -1609,7 +1786,24 @@ async function handleBleConnect() {
         contentArea.querySelector('#ble-data-container').classList.remove('hidden');
         contentArea.querySelector('#skip-sensor-btn').textContent = "Continue →";
     } catch(e) {
-        status.textContent = 'Connection failed. Please try again.'; status.style.color = 'var(--red)';
+        const reason = e?.name ? `${e.name}${e?.message ? `: ${e.message}` : ''}` : (e?.message || 'Unknown error');
+        
+        // Detect specific issues
+        let hint = '';
+        if (reason.includes('NotFoundError') && reason.includes('globally disabled')) {
+            hint = ' Use HTTPS or test on localhost. Browser: Chrome/Edge only.';
+            DEBUG.log(`⚠️ Web Bluetooth globally disabled - check HTTPS, browser, or try localhost`, 'error');
+        } else if (reason.includes('NotFoundError')) {
+            hint = ' No BLE device found nearby. Ensure ESP32 is powered on and advertising.';
+            DEBUG.log(`⚠️ No BLE device found - check ESP32 power and distance (<2m)`, 'error');
+        } else if (reason.includes('NotAllowedError')) {
+            hint = ' User cancelled. Try again and select Mind-state-siborg from list.';
+        }
+        
+        status.textContent = `Connection failed.${hint}`;
+        status.style.color = 'var(--red)';
+        DEBUG.log(`❌ BLE Error: ${reason}`, 'error');
+        toast('Turn off other Bluetooth apps, keep ESP32 near, and retry');
         btn.disabled = false; btn.textContent = 'Search for Sensor';
     }
 }
@@ -1671,19 +1865,23 @@ function setupAudio() {
     loadAiQuestions().then(() => {
         if (!questionsList) return;
         questionsList.innerHTML = aiCheckinQuestions.map((q, i) => `<div style="margin-bottom:6px;"><strong style="color:var(--accent-2)">${i + 1}.</strong> ${q}</div>`).join('');
+        DEBUG.log(`📝 Loaded ${aiCheckinQuestions.length} AI questions`, 'success');
     });
 
     btn.addEventListener('click', async () => {
         if (!mediaRecorder || mediaRecorder.state === 'inactive') {
             try {
+                DEBUG.log('🎤 Starting audio recording setup...', 'info');
                 await calibrateHeartbeatForQuestions(status);
                 status.textContent = 'Getting microphone…';
                 const stream = await navigator.mediaDevices.getUserMedia({ audio:true, video:false });
+                DEBUG.log('✅ Microphone access granted', 'success');
                 mediaRecorder = new MediaRecorder(stream);
                 audioChunks = [];
                 mediaRecorder.ondataavailable = ev => audioChunks.push(ev.data);
                 mediaRecorder.onstop = () => {
                     audioBlob = new Blob(audioChunks, { type:'audio/wav' });
+                    DEBUG.log(`📦 Audio blob created: ${(audioBlob.size / 1024).toFixed(1)}KB, ${questionPhysioSamples.length} physio samples captured`, 'success');
                     status.textContent = '✅ Audio recorded';
                     clearInterval(questionPhysioCaptureTimer);
                     questionPhysioCaptureTimer = null;
@@ -1693,6 +1891,7 @@ function setupAudio() {
                     setTimeout(() => showStep(4), 1400);
                 };
                 mediaRecorder.start();
+                DEBUG.log('🔴 Recording started', 'info');
                 questionPhysioSamples = [];
                 questionPhysioCaptureTimer = setInterval(() => {
                     if (!latestPhysioObj || typeof latestPhysioObj !== 'object') return;
@@ -1707,9 +1906,14 @@ function setupAudio() {
                 status.textContent = 'Recording… tap to stop';
                 btn.classList.add('recording');
                 startLiveReaction(stream);
-            } catch(e) { status.textContent = `Mic error: ${e.message}`; status.style.color='var(--red)'; }
+            } catch(e) { 
+                DEBUG.log(`❌ Audio setup error: ${e.message}`, 'error');
+                status.textContent = `Mic error: ${e.message}`; 
+                status.style.color='var(--red)'; 
+            }
         } else {
             mediaRecorder.stop();
+            DEBUG.log('⏹️ Recording stopped', 'info');
         }
     });
 }
@@ -1830,12 +2034,23 @@ async function setupAnalyze() {
     form.append('ai_questions', JSON.stringify(aiCheckinQuestions));
     form.append('user_id', userId);
 
+    DEBUG.log(`📤 Sending analysis to backend...`, 'info');
+    DEBUG.log(`   - Image: ${imageBlob ? (imageBlob.size / 1024).toFixed(1) + 'KB' : 'none'}`, 'sensor');
+    DEBUG.log(`   - Audio: ${audioBlob ? (audioBlob.size / 1024).toFixed(1) + 'KB' : 'none'}`, 'sensor');
+    DEBUG.log(`   - Physio samples: ${questionPhysioSamples.length}`, 'sensor');
+    DEBUG.log(`   - DASS responses: ${dassAnswers.filter(a => a !== null).length}/21`, 'sensor');
+
     try {
         const res = await fetch(ANALYZE_URL, { method:'POST', body:form });
         if (!res.ok) throw new Error(`Server ${res.status}`);
         const data = await res.json();
+        DEBUG.log(`✅ Backend response received`, 'success');
+        DEBUG.log(`   - Stress Score: ${data.stress_score_percent ?? '?'}%`, 'sensor');
+        DEBUG.log(`   - Stress Level: ${data.stress_level ?? '?'}`, 'sensor');
+        DEBUG.log(`   - Heartbeat Calibrated: ${data.heartbeat_calibrated ?? false}`, 'sensor');
         populateReport(data);
     } catch(e) {
+        DEBUG.log(`❌ Analysis error: ${e.message}`, 'error');
         populateReport({ error: e.message });
     } finally {
         clearInterval(breathInterval);
