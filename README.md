@@ -273,8 +273,6 @@ Research Project
 ---
 
 
----
-
 ## ⭐ Future Improvements
 
 * Mobile app integration
