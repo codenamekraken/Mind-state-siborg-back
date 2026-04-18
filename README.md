@@ -272,11 +272,6 @@ Research Project
 
 ---
 
-## 📬 Contact
-
-For queries or collaboration:
-Email : your-email@example.com
-LinkedIn : https://www.linkedin.com/in/your-profile/
 
 ---
 
